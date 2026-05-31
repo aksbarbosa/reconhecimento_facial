@@ -1,0 +1,19 @@
+# Ambiente virtual
+venv/
+
+# Modelos InsightFace (muito grandes para o GitHub)
+models/
+
+# Dados e imagens
+data/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Variáveis de ambiente
+.env
+
+# Arquivos do sistema Mac
+.DS_Store
