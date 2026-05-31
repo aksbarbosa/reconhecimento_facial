@@ -2,33 +2,38 @@
 streamlit_app.py
 
 Responsabilidade: Interface principal do sistema Face Access System.
-
-Este é o ponto de entrada do frontend. Exibe o menu de navegação
-e redireciona para as páginas de acordo com a seleção do usuário.
+Lê a API Key do .env e a passa para todas as páginas via session_state,
+para que as requisições à API sejam autenticadas.
 
 Como rodar:
     streamlit run frontend/streamlit_app.py
-
-Páginas disponíveis:
-    1. Cadastrar Pessoa   → envia foto e cadastra no banco
-    2. Câmera Ao Vivo     → exibe feed da câmera com reconhecimento em tempo real
-    3. Histórico          → lista todos os acessos registrados
-    4. Pessoas Cadastradas → lista e remove pessoas do banco
 """
 
-import streamlit as st  # Framework de interface web em Python
+import os
+import requests
+import streamlit as st
+from dotenv import load_dotenv  # Lê variáveis do .env
+
+# Carrega o .env para obter a API Key
+load_dotenv()
 
 # ── Configuração da página ─────────────────────────────────────────────────────
 
-# Deve ser a primeira chamada Streamlit do arquivo
 st.set_page_config(
-    page_title="Face Access System",   # Título na aba do navegador
-    page_icon="👤",                    # Ícone na aba do navegador
-    layout="wide",                     # Layout em tela cheia
-    initial_sidebar_state="expanded"   # Menu lateral aberto por padrão
+    page_title="Face Access System",
+    page_icon="👤",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ── Cabeçalho principal ────────────────────────────────────────────────────────
+# ── Armazena a API Key no session_state ────────────────────────────────────────
+# session_state persiste entre páginas no Streamlit
+# Todas as páginas podem acessar st.session_state.api_key
+
+if "api_key" not in st.session_state:
+    st.session_state.api_key = os.getenv("API_KEY", "")
+
+# ── Cabeçalho ──────────────────────────────────────────────────────────────────
 
 st.title("👤 Face Access System")
 st.markdown("Sistema de reconhecimento facial em tempo real.")
@@ -36,22 +41,20 @@ st.divider()
 
 # ── Status da API ──────────────────────────────────────────────────────────────
 
-import requests  # Para verificar se a API está rodando
-
 try:
-    # Tenta chamar o endpoint /health da API
-    response = requests.get("http://localhost:8000/health", timeout=2)
+    # Envia a API Key no header de todas as requisições
+    headers = {"X-API-Key": st.session_state.api_key}
+    response = requests.get("http://localhost:8000/health", headers=headers, timeout=2)
     data = response.json()
 
-    if data["status"] == "ok":
-        # API e banco respondendo normalmente
+    if response.status_code == 200 and data["status"] == "ok":
         st.success("✅ API conectada | Banco de dados online")
+    elif response.status_code == 403:
+        st.error("❌ API Key inválida. Verifique o arquivo .env")
     else:
-        # API respondeu mas banco está com problema
         st.warning("⚠️ API conectada | Banco de dados offline")
 
 except Exception:
-    # API não está rodando
     st.error("❌ API offline — rode: uvicorn app.main:app --reload")
 
 st.divider()

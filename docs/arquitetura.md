@@ -498,3 +498,72 @@ Clique no cadeado na barra de endereço e permita o acesso à câmera.
 ### InsightFace demora na primeira execução
 Normal — está baixando o modelo `buffalo_l` (~500MB).
 Depois fica em cache em `models/insightface/`.
+
+---
+
+## Segurança
+
+### 1. Credenciais no .env
+
+As credenciais do banco e a API Key nunca ficam escritas no código.
+Ficam no arquivo `.env` que é ignorado pelo Git.
+
+**Configurar:**
+```bash
+cp .env.example .env
+# Edite o .env com suas credenciais reais
+```
+
+**Gerar uma API Key segura:**
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Cole o resultado no `.env`:
+```
+API_KEY=a1b2c3d4e5f6...
+```
+
+---
+
+### 2. API Key
+
+Todos os endpoints da API exigem autenticação via header `X-API-Key`.
+Sem a chave correta, a API retorna erro **403 Forbidden**.
+
+**Exemplo de requisição autenticada:**
+```bash
+curl -H "X-API-Key: sua_chave" http://localhost:8000/persons/
+```
+
+O frontend lê a chave automaticamente do `.env` e a envia em todas as requisições.
+
+**Como funciona:**
+```
+Cliente envia → X-API-Key: sua_chave
+API verifica  → chave correta? → permite
+               → chave errada? → 403 Forbidden
+```
+
+---
+
+### 3. O que nunca commitar no GitHub
+
+```
+❌ .env                  → credenciais reais
+❌ data/                 → fotos de pessoas
+❌ models/               → modelos InsightFace (muito grandes)
+```
+
+Todos já estão no `.gitignore`.
+
+---
+
+### 4. Instalar dependência de segurança
+
+```bash
+pip3 install python-dotenv --break-system-packages
+```
+
+**Por que?** O `python-dotenv` é a biblioteca que lê o arquivo `.env`
+e carrega as variáveis para o sistema. Sem ela, `load_dotenv()` não funciona.
