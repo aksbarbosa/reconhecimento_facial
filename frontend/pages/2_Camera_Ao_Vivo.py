@@ -3,16 +3,18 @@
 
 Responsabilidade: Página para acompanhar o reconhecimento facial
 em tempo real via câmera.
-
-Permite ligar/desligar a câmera e exibe os reconhecimentos
-conforme acontecem, consultando a API periodicamente.
 """
 
 import time
-import requests         # Chamadas HTTP para a API
-import streamlit as st  # Interface web
+import os
+import requests
+import streamlit as st
+from dotenv import load_dotenv
 
-# ── Configuração da página ─────────────────────────────────────────────────────
+# Carrega a API Key do .env
+load_dotenv()
+API_KEY = os.getenv("API_KEY", "")
+HEADERS = {"X-API-Key": API_KEY}
 
 st.set_page_config(page_title="Câmera Ao Vivo", page_icon="🎥", layout="wide")
 
@@ -25,19 +27,26 @@ st.divider()
 def get_camera_status():
     """Consulta o status atual da câmera na API."""
     try:
-        response = requests.get("http://localhost:8000/camera/status", timeout=2)
+        response = requests.get(
+            "http://localhost:8000/camera/status",
+            headers=HEADERS,
+            timeout=2
+        )
         return response.json()
     except Exception:
-        return None
+        return {}
 
 status = get_camera_status()
 
-# Exibe o status atual
+# Usa .get() para evitar KeyError caso a chave não exista na resposta
+camera_running    = status.get("camera_running", False)
+candidates_loaded = status.get("candidates_loaded", 0)
+
 if status:
-    if status["camera_running"]:
-        st.success(f"🟢 Câmera ativa | {status['candidates_loaded']} pessoa(s) cadastrada(s)")
+    if camera_running:
+        st.success(f"🟢 Câmera ativa | {candidates_loaded} pessoa(s) cadastrada(s)")
     else:
-        st.warning(f"🔴 Câmera inativa | {status['candidates_loaded']} pessoa(s) cadastrada(s)")
+        st.warning(f"🔴 Câmera inativa | {candidates_loaded} pessoa(s) cadastrada(s)")
 else:
     st.error("❌ API offline. Rode: uvicorn app.main:app --reload")
 
@@ -48,31 +57,33 @@ st.divider()
 col1, col2 = st.columns(2)
 
 with col1:
-    # Botão para ligar a câmera
     if st.button("▶️ Ligar Câmera", type="primary", use_container_width=True):
         try:
             response = requests.post(
                 "http://localhost:8000/camera/start",
-                params={"source": 0, "threshold": 0.6}  # câmera 0 = Mac
+                headers=HEADERS,
+                params={"source": 0, "threshold": 0.6}
             )
             if response.status_code == 200:
                 st.success("✅ Câmera iniciada!")
-                st.rerun()  # Atualiza a página para refletir o novo status
+                st.rerun()
             else:
-                st.error(f"❌ {response.json()['detail']}")
+                st.error(f"❌ {response.json().get('detail', 'Erro desconhecido')}")
         except Exception:
             st.error("❌ API offline.")
 
 with col2:
-    # Botão para desligar a câmera
     if st.button("⏹️ Desligar Câmera", use_container_width=True):
         try:
-            response = requests.post("http://localhost:8000/camera/stop")
+            response = requests.post(
+                "http://localhost:8000/camera/stop",
+                headers=HEADERS
+            )
             if response.status_code == 200:
                 st.success("✅ Câmera encerrada!")
                 st.rerun()
             else:
-                st.error(f"❌ {response.json()['detail']}")
+                st.error(f"❌ {response.json().get('detail', 'Erro desconhecido')}")
         except Exception:
             st.error("❌ API offline.")
 
@@ -82,22 +93,21 @@ st.divider()
 
 st.subheader("🔍 Último Reconhecimento")
 
-def get_last_recognition():
-    """Consulta o último reconhecimento registrado."""
-    try:
-        response = requests.get("http://localhost:8000/camera/last", timeout=2)
-        return response.json()
-    except Exception:
-        return None
+try:
+    response = requests.get(
+        "http://localhost:8000/camera/last",
+        headers=HEADERS,
+        timeout=2
+    )
+    last = response.json()
+except Exception:
+    last = {}
 
-last = get_last_recognition()
-
-if last and "person_name" in last:
-    # Exibe os dados do último reconhecimento
+if last and last.get("person_name"):
     col1, col2, col3 = st.columns(3)
     col1.metric("Pessoa", last.get("person_name", "—"))
     col2.metric("Confiança", f"{last.get('similarity', 0):.0%}")
-    col3.metric("Horário", last.get("timestamp", "—")[:15])
+    col3.metric("Horário", last.get("timestamp", "—"))
 else:
     st.info("Nenhum reconhecimento registrado ainda. Ligue a câmera e apareça na frente dela!")
 
@@ -105,10 +115,8 @@ st.divider()
 
 # ── Auto-atualização ───────────────────────────────────────────────────────────
 
-# Atualiza a página automaticamente a cada 3 segundos
-# para mostrar novos reconhecimentos sem precisar recarregar manualmente
 st.caption("🔄 Página atualiza automaticamente a cada 3 segundos.")
 
-if status and status.get("camera_running"):
+if camera_running:
     time.sleep(3)
     st.rerun()
