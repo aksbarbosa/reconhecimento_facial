@@ -1,136 +1,79 @@
-# Face Access System — Documentação Completa
+# Face Access System — Guia de Uso
 
-Sistema de reconhecimento facial em tempo real usando OpenCV, InsightFace,
-FastAPI e PostgreSQL. Captura frames de câmera, detecta rostos, identifica
-pessoas cadastradas e notifica o frontend em tempo real.
+Sistema de reconhecimento facial escolar em tempo real. Captura frames de câmera,
+detecta o rosto de alunos cadastrados e **libera ou nega o acesso conforme o
+horário da turma** de cada aluno. Usa OpenCV, InsightFace, FastAPI e PostgreSQL.
 
 ---
 
 ## Sumário
 
 1. [Visão Geral](#visão-geral)
-2. [Arquitetura](#arquitetura)
-3. [Estrutura de Arquivos](#estrutura-de-arquivos)
+2. [Modelo de Dados](#modelo-de-dados)
+3. [Regra de Acesso](#regra-de-acesso)
 4. [Instalação](#instalação)
-5. [Como Usar o Sistema](#como-usar-o-sistema)
-6. [Como Cada Arquivo se Conecta](#como-cada-arquivo-se-conecta)
-7. [Banco de Dados](#banco-de-dados)
-8. [Sistema de Presença](#sistema-de-presença)
-9. [API — Endpoints](#api--endpoints)
-10. [Configurações](#configurações)
+5. [Subir o Sistema](#subir-o-sistema)
+6. [Como Usar (passo a passo)](#como-usar-passo-a-passo)
+7. [Arquitetura e Pipeline](#arquitetura-e-pipeline)
+8. [API — Endpoints](#api--endpoints)
+9. [Banco de Dados](#banco-de-dados)
+10. [Segurança](#segurança)
 11. [Solução de Problemas](#solução-de-problemas)
 
 ---
 
 ## Visão Geral
 
-O sistema funciona em dois modos:
+O sistema funciona em dois modos.
 
-**Modo Cadastro** — você envia uma foto ou tira uma pela câmera.
-O sistema detecta o rosto, gera o vetor matemático (embedding) e salva no banco.
+**Modo Cadastro** — você cadastra horários, turmas e alunos. Ao cadastrar um
+aluno, envia uma foto; o sistema detecta o rosto, gera o vetor matemático
+(embedding) e salva no banco, vinculando o aluno a uma turma.
 
-**Modo Reconhecimento** — a câmera fica ligada em loop contínuo.
-Quando um rosto aparece, o sistema compara com os cadastros do banco.
-Se reconhecer, salva o log e exibe no histórico. Só salva novamente
-quando a pessoa sair do campo da câmera e voltar.
-
----
-
-## Arquitetura
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     FRONTEND (Streamlit)                        │
-│  Cadastrar Pessoa | Câmera Ao Vivo | Histórico | Pessoas        │
-└──────────────────┬──────────────────────────┬───────────────────┘
-                   │ HTTP (REST)              │ Auto-atualização
-                   ▼                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       API (FastAPI)                             │
-│  /health  /persons  /camera/start  /camera/stop  /camera/logs  │
-└────┬──────────────┬───────────────────────────────────────────┘
-     │              │
-     ▼              ▼
-PersonService   CameraService
-cadastra        liga/desliga
-pessoas         a câmera
-     │              │
-     ▼              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   PIPELINE DE VISÃO                             │
-│  FrameReader → FaceDetector → FaceEmbedder → FaceMatcher       │
-│                                    ↓                            │
-│                           PresenceTracker                       │
-│                    (salva só na entrada)                        │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                  BANCO DE DADOS (PostgreSQL)                    │
-│       persons | face_embeddings | access_logs                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Modo Reconhecimento** — a câmera fica ligada em loop. Quando um rosto aparece,
+o sistema compara com os cadastros. Se reconhece o aluno, verifica se o horário
+atual está dentro da janela do turno da turma dele e decide o acesso. Cada entrada
+é registrada no histórico, com o resultado (liberado ou negado). Só registra de
+novo quando o aluno sai do campo da câmera e volta.
 
 ---
 
-## Estrutura de Arquivos
+## Modelo de Dados
+
+A estrutura segue uma hierarquia. Cada nível depende do anterior:
 
 ```
-face_access_system/
-│
-├── app/
-│   ├── main.py                    ← Sobe a API FastAPI
-│   │
-│   ├── api/
-│   │   ├── routes_health.py       ← GET /health
-│   │   ├── routes_persons.py      ← POST/GET/DELETE /persons
-│   │   └── routes_camera.py       ← POST/GET /camera + /logs
-│   │
-│   ├── camera/
-│   │   ├── frame_reader.py        ← Captura frames via OpenCV
-│   │   ├── ip_camera.py           ← Monta URL RTSP da câmera IP
-│   │   └── snapshot.py            ← Salva frames em disco
-│   │
-│   ├── face/
-│   │   ├── detector.py            ← Detecta rostos (InsightFace)
-│   │   ├── embedder.py            ← Gera vetores de 512 números
-│   │   └── matcher.py             ← Compara vetores com o banco
-│   │
-│   ├── services/
-│   │   ├── recognition_service.py ← Orquestra o reconhecimento
-│   │   ├── person_service.py      ← Gerencia cadastro de pessoas
-│   │   └── camera_service.py      ← Gerencia ciclo de vida da câmera
-│   │
-│   ├── workers/
-│   │   └── camera_worker.py       ← Loop contínuo + rastreamento de presença
-│   │
-│   └── db/
-│       ├── database.py            ← Conexão com PostgreSQL
-│       └── models.py              ← Operações no banco (CRUD)
-│
-├── data/
-│   ├── raw/uploads/               ← Fotos enviadas para cadastro
-│   ├── raw/camera_frames/         ← Rostos desconhecidos salvos
-│   ├── processed/cropped_faces/   ← Rostos recortados no cadastro
-│   └── snapshots/                 ← Fotos salvas no reconhecimento
-│
-├── models/
-│   └── insightface/               ← Modelos InsightFace (buffalo_l)
-│
-├── frontend/
-│   ├── streamlit_app.py           ← Página inicial
-│   └── pages/
-│       ├── 1_Cadastrar_Pessoa.py  ← Cadastro via upload ou câmera
-│       ├── 2_Camera_Ao_Vivo.py    ← Controle e monitoramento
-│       ├── 3_Historico.py         ← Histórico de acessos
-│       └── 4_Pessoas_Cadastradas.py ← Gerenciar pessoas
-│
-└── scripts/
-    ├── test_camera_mac.py         ← Testa câmera do Mac
-    ├── test_pipeline.py           ← Testa pipeline ao vivo
-    ├── tirar_foto.py              ← Tira foto pela câmera
-    └── register_from_folder.py    ← Cadastra pessoas em lote
+horarios  →  turmas  →  alunos  →  face_embeddings
+(turno +      (3º Ano A,  (a pessoa     (vetor do rosto)
+ período)      vinculada    reconhecida,
+               a um horário)  vinculada    alunos  →  access_logs
+                              a uma turma)             (histórico de acessos)
 ```
+
+- **horarios** — cada horário é um turno com nome e período (hora de início e fim). Ex: Matutino, 07:00–12:20.
+- **turmas** — cada turma pertence a um horário e a um ano letivo. Ex: "3º Ano A", turno Matutino, 2026.
+- **alunos** — cada aluno pertence a uma turma. É a pessoa reconhecida pela câmera.
+- **face_embeddings** — o vetor de 512 números gerado pela foto do aluno.
+- **access_logs** — o registro de cada reconhecimento, com o resultado de acesso.
+
+O acesso de um aluno é decidido percorrendo essa cadeia:
+`aluno → turma → horario (início, fim)`.
+
+---
+
+## Regra de Acesso
+
+Ao reconhecer um rosto, o sistema avalia quatro situações:
+
+| Situação | Resultado | Mensagem exibida |
+|---|---|---|
+| Rosto não reconhecido | ⛔ Negado | Rosto não cadastrado |
+| Reconhecido, sem turma/horário | ⛔ Negado | Reconhecido, mas sem turma/horário definido |
+| Reconhecido, fora do horário da turma | ⛔ Negado | Reconhecido, mas horário não permitido |
+| Reconhecido, dentro do horário da turma | ✅ Liberado | Acesso liberado |
+
+Os limites do horário são **inclusivos**: um turno de 07:00 às 12:20 libera o
+acesso exatamente às 07:00 e às 12:20.
 
 ---
 
@@ -140,14 +83,14 @@ face_access_system/
 
 - Python 3.9 ou superior
 - Mac, Linux ou Windows
-- PostgreSQL instalado via Homebrew
+- PostgreSQL (no Mac, via Homebrew)
 
 ### Passo a passo
 
 **1. Instalar dependências Python**
 ```bash
 pip3 install opencv-python insightface onnxruntime numpy \
-             fastapi uvicorn psycopg2-binary python-multipart \
+             fastapi uvicorn psycopg2-binary python-multipart python-dotenv \
              streamlit requests pandas --break-system-packages
 ```
 
@@ -163,49 +106,41 @@ psql postgres
 ```
 ```sql
 CREATE DATABASE face_access;
-ALTER USER filipe WITH PASSWORD 'suasenha';
-GRANT ALL PRIVILEGES ON DATABASE face_access TO filipe;
 \q
 ```
 
 **4. Criar as tabelas**
 
-No TablePlus ou psql, execute:
-```sql
-CREATE TABLE persons (
-    id         SERIAL PRIMARY KEY,
-    name       VARCHAR(100) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE face_embeddings (
-    id         SERIAL PRIMARY KEY,
-    person_id  INTEGER REFERENCES persons(id) ON DELETE CASCADE,
-    embedding  BYTEA NOT NULL,
-    image_path VARCHAR(255),
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE access_logs (
-    id         SERIAL PRIMARY KEY,
-    person_id  INTEGER REFERENCES persons(id),
-    similarity FLOAT,
-    image_path VARCHAR(255),
-    created_at TIMESTAMP DEFAULT NOW()
-);
+A partir da raiz do projeto:
+```bash
+psql -U filipe -d face_access -f scripts/init_db.sql
 ```
 
-**5. Configurar a conexão com o banco**
+Você deve ver cinco `CREATE TABLE` e a mensagem "Banco criado com sucesso".
+O script já insere os três turnos padrão (Matutino, Vespertino, Noturno).
 
-Edite `app/db/database.py`:
-```python
-DB_CONFIG = {
-    "host":     "127.0.0.1",
-    "port":     5432,
-    "database": "face_access",
-    "user":     "filipe",       # seu usuário
-    "password": "suasenha",     # sua senha
-}
+> Se aparecer `NOTICE: ... already exists, skipping`, é sinal de que existem
+> tabelas antigas no banco. Veja [Solução de Problemas](#solução-de-problemas).
+
+**5. Configurar o `.env`**
+```bash
+cp .env.example .env
+# edite o .env com suas credenciais
+```
+
+O `.env` precisa conter:
+```
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=face_access
+DB_USER=filipe
+DB_PASSWORD=suasenha
+API_KEY=cole_aqui_uma_chave_gerada
+```
+
+Gere uma API Key segura:
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 **6. Permissão de câmera no Mac**
@@ -215,15 +150,13 @@ Configurações do Sistema → Privacidade e Segurança → Câmera → ✅ Term
 
 ---
 
-## Como Usar o Sistema
+## Subir o Sistema
 
-### 1. Iniciar os serviços
-
-Abra **dois terminais** na pasta do projeto:
+Dois terminais na raiz do projeto.
 
 **Terminal 1 — API:**
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --env-file .env
 ```
 
 **Terminal 2 — Frontend:**
@@ -231,120 +164,124 @@ uvicorn app.main:app --reload
 streamlit run frontend/streamlit_app.py
 ```
 
-Acesse o frontend em: `http://localhost:8501`
+Acesse o frontend em `http://localhost:8501` e a documentação da API em
+`http://localhost:8000/docs`.
 
 ---
 
-### 2. Cadastrar uma pessoa
+## Como Usar (passo a passo)
 
-Clique em **Cadastrar Pessoa** no menu lateral.
+A ordem importa, porque cada cadastro depende do anterior.
 
-**Opção A — Upload de foto:**
-- Selecione a aba **📁 Upload de Foto**
-- Digite o nome da pessoa
-- Clique em **Escolher arquivo** e selecione uma foto
-- Clique em **✅ Cadastrar Pessoa**
+### 1. Criar um horário
 
-**Opção B — Tirar foto pela câmera:**
-- Selecione a aba **📷 Tirar Foto**
-- Digite o nome da pessoa
-- Permita o acesso à câmera no navegador
-- Clique em **Take Photo**
-- Clique em **✅ Cadastrar Pessoa**
+Na página **🕒 Horários**, defina um turno com nome, hora de início e hora de fim.
+Os três turnos padrão (Matutino, Vespertino, Noturno) já vêm cadastrados — você
+pode usá-los ou criar outros.
 
-**Dicas para uma boa foto:**
-- Rosto centralizado e bem iluminado
-- Fundo neutro
-- Apenas um rosto na foto
-- Foto nítida, sem borrão
+### 2. Criar uma turma
 
----
+Na página **🏫 Turmas**, preencha:
+- **Nome** (ex: "3º Ano A")
+- **Série / Nível** (ex: "3º Ano")
+- **Turno** — escolhido da lista de horários
+- **Ano Letivo** (ex: 2026)
 
-### 3. Ligar a câmera
+### 3. Cadastrar um aluno
 
-Clique em **Câmera Ao Vivo** no menu lateral e clique em **▶️ Ligar Câmera**.
+Na página **📸 Cadastrar Aluno**, digite o nome, escolha a **turma** e envie uma
+foto (upload ou câmera). O sistema detecta o rosto e salva o embedding.
 
-O sistema vai:
-- Conectar à câmera do Mac (índice 0)
-- Carregar todos os cadastros do banco
-- Iniciar o loop de reconhecimento em background
+Dicas para a foto: rosto centralizado, boa iluminação, fundo neutro, apenas um
+rosto, foto nítida.
 
-Quando reconhecer alguém, aparece:
-```
-🟢 Câmera ativa | 2 pessoa(s) cadastrada(s)
-Pessoa: Filipe | Confiança: 78% | Horário: 30/05/2026 10:25:35
-```
+### 4. Ligar a câmera
 
----
-
-### 4. Ver o histórico
-
-Clique em **Histórico** no menu lateral.
-
-Exibe uma tabela com todos os acessos registrados:
-
-| ID | Pessoa | Confiança | Data/Hora |
-|---|---|---|---|
-| 1 | Filipe | 78% | 30/05/2026 10:25:35 |
-| 2 | Maria | 92% | 30/05/2026 11:10:02 |
-
-Clique em **🔄 Atualizar** para ver os registros mais recentes.
-
----
-
-### 5. Gerenciar pessoas
-
-Clique em **Pessoas Cadastradas** no menu lateral.
-
-Exibe todas as pessoas cadastradas com ID, nome e data de cadastro.
-Para remover uma pessoa, selecione no menu e clique em **🗑️ Remover**.
-
-> ⚠️ Remover uma pessoa apaga também todos os seus embeddings e não pode ser desfeito.
-
----
-
-### 6. Desligar a câmera
-
-Na página **Câmera Ao Vivo**, clique em **⏹️ Desligar Câmera**.
-
----
-
-### 7. Parar os serviços
-
-Em cada terminal, pressione `Ctrl + C`.
-
----
-
-## Como Cada Arquivo se Conecta
-
-### Pipeline de visão
+Na página **🎥 Câmera Ao Vivo**, clique em **▶️ Ligar Câmera**. Ao reconhecer um
+aluno, aparece o banner grande de acesso:
 
 ```
-frame_reader.py
-    Abre a câmera e captura frames.
-    Entrega frame_bgr (para salvar) e frame_rgb (para detectar).
-        ↓
-detector.py
-    Recebe frame_rgb e passa pelo InsightFace.
-    Detecta rostos e recorta cada um com OpenCV.
-    Entrega lista de objetos Face + imagens recortadas.
-        ↓
-embedder.py
-    Recebe cada objeto Face.
-    Extrai o vetor de 512 números gerado pelo InsightFace.
-    Normaliza o vetor para comparações precisas.
-    Entrega array NumPy de 512 floats.
-        ↓
-matcher.py
-    Recebe o vetor do rosto capturado.
-    Compara com todos os vetores do banco via similaridade cosseno.
-    Entrega MatchResult (matched, person_name, similarity).
-        ↓
-camera_worker.py
-    Orquestra tudo em loop contínuo.
-    Controla o rastreamento de presença.
-    Salva no banco apenas na entrada.
+✅ ACESSO LIBERADO        ou        ⛔ ACESSO NEGADO
+Acesso liberado                      Reconhecido, mas horário não permitido
+Aluno: Filipe | Turma: 3º Ano A | Turno: Matutino | Confiança: 78%
 ```
+
+### 5. Ver o histórico
+
+Na página **📋 Histórico**, veja todos os reconhecimentos com aluno, turma, turno,
+confiança e o resultado (Liberado/Negado).
+
+### 6. Gerenciar alunos
+
+Na página **👥 Alunos Cadastrados**, veja todos os alunos com sua turma, mude a
+turma de um aluno, ou remova um aluno (apaga também seus embeddings e histórico).
+
+---
+
+## Arquitetura e Pipeline
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                   FRONTEND (Streamlit)                        │
+│  Horários | Turmas | Cadastrar Aluno | Câmera | Histórico     │
+└───────────────────────┬───────────────────────────────────────┘
+                        │ HTTP (REST) + API Key
+                        ▼
+┌──────────────────────────────────────────────────────────────┐
+│                       API (FastAPI)                           │
+│  /horarios  /turmas  /alunos  /camera  /health                │
+└───────────┬──────────────────────────────────────────────────┘
+            │
+            ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  PIPELINE DE VISÃO (background)               │
+│  FrameReader → FaceDetector → FaceEmbedder → FaceMatcher      │
+│                                    ↓                          │
+│                       avaliação de acesso por horário         │
+│                       (aluno → turma → horário)               │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────────────────────┐
+│                BANCO DE DADOS (PostgreSQL)                    │
+│   horarios | turmas | alunos | face_embeddings | access_logs  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+O modelo InsightFace é carregado **uma única vez** (em `app/face/engine.py`) e
+compartilhado entre o cadastro e a câmera, com a inferência serializada por um
+lock para ser segura entre threads.
+
+Notificações em tempo real saem por callbacks (`on_recognized`/`on_unknown`)
+que o `CameraWorker` dispara para o WebSocket `/camera/ws`.
+
+---
+
+## API — Endpoints
+
+Documentação interativa em `http://localhost:8000/docs`. Todos os endpoints HTTP
+exigem o header `X-API-Key`.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/health` | Status da API e do banco |
+| GET | `/horarios/` | Lista horários |
+| POST | `/horarios/` | Cria horário (nome, inicio, fim) |
+| DELETE | `/horarios/{id}` | Remove horário (bloqueado se houver turmas) |
+| GET | `/turmas/` | Lista turmas (com horário) |
+| POST | `/turmas/` | Cria turma (nome, serie_nivel, horario_id, ano_letivo) |
+| DELETE | `/turmas/{id}` | Remove turma (alunos ficam sem turma) |
+| POST | `/alunos/register` | Cadastra aluno (nome, turma_id, foto) |
+| GET | `/alunos/` | Lista alunos (com turma e horário) |
+| GET | `/alunos/{id}` | Busca aluno por ID |
+| PATCH | `/alunos/{id}/turma` | Muda a turma de um aluno |
+| DELETE | `/alunos/{id}` | Remove aluno e seus embeddings/logs |
+| POST | `/camera/start` | Inicia a câmera |
+| POST | `/camera/stop` | Para a câmera |
+| GET | `/camera/status` | Status da câmera |
+| GET | `/camera/last` | Último reconhecimento (com decisão de acesso) |
+| GET | `/camera/logs` | Histórico de acessos |
+| WS | `/camera/ws` | Notificações em tempo real |
 
 ---
 
@@ -353,217 +290,90 @@ camera_worker.py
 ### Tabelas
 
 ```
-persons           → quem está cadastrado no sistema
-face_embeddings   → vetores dos rostos de cada pessoa
-access_logs       → histórico de cada vez que alguém foi reconhecido
+horarios         → turnos com nome e período (inicio, fim)
+turmas           → turmas vinculadas a um horário e a um ano letivo
+alunos           → alunos vinculados a uma turma
+face_embeddings  → vetores dos rostos de cada aluno
+access_logs      → histórico de reconhecimentos, com resultado de acesso
 ```
 
-### Como o embedding é salvo
+### Comportamento na exclusão
 
-O vetor de 512 números é serializado para bytes antes de salvar:
-
-```python
-# Salvar — array → bytes
-embedding_bytes = embedding.astype(np.float32).tobytes()
-
-# Ler — bytes → array
-embedding_array = np.frombuffer(bytes_do_banco, dtype=np.float32)
-```
-
-### Visualizar no TablePlus
-
-Abra o TablePlus e conecte com:
-```
-Host:     127.0.0.1
-Port:     5432
-User:     filipe
-Password: suasenha
-Database: face_access
-```
-
----
-
-## Sistema de Presença
-
-O sistema salva no banco **apenas quando a pessoa aparece** — não a cada frame.
-
-```
-Frame 1:  Filipe detectado → não estava → SALVA no banco
-Frame 2:  Filipe detectado → já presente → ignora
-Frame 3:  Filipe detectado → já presente → ignora
-Frames 4-13: Filipe não detectado → contador de ausência sobe
-Frame 14: Contador atingiu 10 → Filipe considerado ausente
-Frame 15: Filipe detectado → não estava → SALVA no banco
-```
-
-### Por que 10 frames?
-
-Com `frame_interval=0.1s`, 10 frames = 1 segundo de ausência.
-Evita falsos saídas quando a pessoa pisca ou vira o rosto por um momento.
-
-### Ajustar a sensibilidade
-
-Em `app/workers/camera_worker.py`:
-```python
-FRAMES_PARA_SAIR = 10   # 1 segundo  — mais sensível
-FRAMES_PARA_SAIR = 30   # 3 segundos — padrão recomendado
-FRAMES_PARA_SAIR = 50   # 5 segundos — menos sensível
-```
-
----
-
-## API — Endpoints
-
-Documentação interativa disponível em: `http://localhost:8000/docs`
-
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/health` | Status da API e do banco |
-| POST | `/persons/register` | Cadastra pessoa (multipart/form-data) |
-| GET | `/persons/` | Lista todas as pessoas |
-| GET | `/persons/{id}` | Busca pessoa por ID |
-| DELETE | `/persons/{id}` | Remove pessoa e embeddings |
-| POST | `/camera/start` | Inicia a câmera |
-| POST | `/camera/stop` | Para a câmera |
-| GET | `/camera/status` | Status atual da câmera |
-| GET | `/camera/last` | Último reconhecimento |
-| GET | `/camera/logs` | Histórico de acessos |
-| WS | `/camera/ws` | WebSocket em tempo real |
-
----
-
-## Configurações
-
-### Limiar de similaridade (threshold)
-
-Controla o quão rigoroso é o reconhecimento:
-
-| Valor | Comportamento |
+| Você apaga | O que acontece com os dependentes |
 |---|---|
-| `0.5` | Permissivo — mais falsos positivos |
-| `0.6` | Equilibrado — recomendado para uso geral |
-| `0.7` | Restritivo — mais falsos negativos |
+| Horário | Bloqueado se houver turmas usando (RESTRICT) |
+| Turma | Alunos ficam sem turma (SET NULL) → passam a ter acesso negado |
+| Aluno | Embeddings e logs são apagados junto (CASCADE) |
 
-Para ajustar, mude ao ligar a câmera:
-```
-POST /camera/start?threshold=0.7
-```
+### Ver os dados no terminal
 
-### Câmera IP
-
-Para usar uma câmera IP em vez da câmera do Mac:
-```
-POST /camera/start?source=rtsp://user:senha@192.168.1.100:554/stream
-```
-
-URLs por fabricante:
-
-| Marca | URL |
-|---|---|
-| Hikvision | `rtsp://user:pass@IP:554/Streaming/Channels/101` |
-| Dahua | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1` |
-| Intelbras | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1` |
-
----
-
-## Solução de Problemas
-
-### API não sobe
 ```bash
-# Verifique se o PostgreSQL está rodando
-brew services list
-
-# Inicie se necessário
-brew services start postgresql@15
+psql -U filipe -d face_access -c "SELECT * FROM horarios;"
+psql -U filipe -d face_access -c "SELECT id, nome, turma_id FROM alunos;"
+psql -U filipe -d face_access -c "SELECT * FROM turmas;"
 ```
 
-### Câmera não abre no terminal
-```
-Configurações do Sistema → Privacidade e Segurança → Câmera → ✅ Terminal
-```
-
-### Câmera não abre no navegador (página de cadastro)
-Clique no cadeado na barra de endereço e permita o acesso à câmera.
-
-### Pessoa não é reconhecida
-- Verifique se foi cadastrada em **Pessoas Cadastradas**
-- Tente diminuir o threshold: `POST /camera/start?threshold=0.5`
-- Certifique-se de boa iluminação na câmera
-
-### Histórico não aparece
-- Verifique se a câmera está ligada na página **Câmera Ao Vivo**
-- Confirme que há pessoas cadastradas no banco
-- Acesse `http://localhost:8000/camera/logs` para verificar os dados
-
-### InsightFace demora na primeira execução
-Normal — está baixando o modelo `buffalo_l` (~500MB).
-Depois fica em cache em `models/insightface/`.
+Evite `SELECT *` em `face_embeddings` — a coluna de embedding é binária e enche
+a tela. Selecione só `id, aluno_id, image_path, created_at`.
 
 ---
 
 ## Segurança
 
-### 1. Credenciais no .env
-
-As credenciais do banco e a API Key nunca ficam escritas no código.
-Ficam no arquivo `.env` que é ignorado pelo Git.
-
-**Configurar:**
-```bash
-cp .env.example .env
-# Edite o .env com suas credenciais reais
-```
-
-**Gerar uma API Key segura:**
-```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Cole o resultado no `.env`:
-```
-API_KEY=a1b2c3d4e5f6...
-```
+- **Credenciais no `.env`** — banco e API Key nunca ficam no código. O `.env`
+  está no `.gitignore`.
+- **API Key** — todos os endpoints HTTP exigem o header `X-API-Key`. A comparação
+  da chave é feita em tempo constante (resistente a timing attack).
+- **Upload** — o nome do arquivo enviado é sanitizado e a extensão validada no
+  servidor (evita path traversal).
+- **Não commitar** no GitHub: `.env`, `data/` (fotos), `models/` (modelos grandes).
 
 ---
 
-### 2. API Key
+## Solução de Problemas
 
-Todos os endpoints da API exigem autenticação via header `X-API-Key`.
-Sem a chave correta, a API retorna erro **403 Forbidden**.
+### `NOTICE: relation "..." already exists, skipping` ao criar o banco
 
-**Exemplo de requisição autenticada:**
-```bash
-curl -H "X-API-Key: sua_chave" http://localhost:8000/persons/
-```
-
-O frontend lê a chave automaticamente do `.env` e a envia em todas as requisições.
-
-**Como funciona:**
-```
-Cliente envia → X-API-Key: sua_chave
-API verifica  → chave correta? → permite
-               → chave errada? → 403 Forbidden
-```
-
----
-
-### 3. O que nunca commitar no GitHub
-
-```
-❌ .env                  → credenciais reais
-❌ data/                 → fotos de pessoas
-❌ models/               → modelos InsightFace (muito grandes)
-```
-
-Todos já estão no `.gitignore`.
-
----
-
-### 4. Instalar dependência de segurança
+Existem tabelas antigas no banco. Como o `init_db.sql` usa
+`CREATE TABLE IF NOT EXISTS`, ele pula as que já existem — deixando o banco
+misturado. Se não há dados a preservar, zere tudo e recrie:
 
 ```bash
-pip3 install python-dotenv --break-system-packages
+psql -U filipe -d face_access -c "DROP TABLE IF EXISTS access_logs, face_embeddings, alunos, turmas, horarios, persons CASCADE;"
+psql -U filipe -d face_access -f scripts/init_db.sql
 ```
 
-**Por que?** O `python-dotenv` é a biblioteca que lê o arquivo `.env`
-e carrega as variáveis para o sistema. Sem ela, `load_dotenv()` não funciona.
+Na segunda vez você deve ver cinco `CREATE TABLE` **sem** nenhum NOTICE.
+
+### `role "..." does not exist`
+
+O usuário do `-U` não existe no Postgres. Use o usuário do seu `.env`
+(`grep DB_USER .env`). No Mac com Homebrew, costuma ser o seu login.
+
+### Aluno reconhecido mas sempre negado
+
+Verifique se ele tem turma e se a turma tem horário. Aluno sem turma, ou turma
+sem horário, cai em "Reconhecido, mas sem turma/horário definido". Confira a
+turma na página **Alunos Cadastrados** e o turno na página **Turmas**.
+
+### Acesso negado por horário inesperadamente
+
+O turno da turma do aluno não bate com a hora atual. Para testar o "liberado"
+fora do horário real, cadastre/atribua o aluno a uma turma cujo turno cubra o
+momento do teste.
+
+### Câmera não abre no terminal
+
+```
+Configurações do Sistema → Privacidade e Segurança → Câmera → ✅ Terminal
+```
+
+### InsightFace demora na primeira execução
+
+Normal — está baixando o modelo `buffalo_l` (~500MB). Depois fica em cache em
+`models/insightface/`.
+
+### API offline no frontend
+
+Confirme que o uvicorn está rodando e que a `API_KEY` do `.env` é a mesma que o
+frontend lê (ambos leem do mesmo `.env`).

@@ -1,9 +1,7 @@
 """
-streamlit_app.py
+streamlit_app.py — Página inicial do Face Access System (modelo escolar).
 
-Responsabilidade: Interface principal do sistema Face Access System.
-Lê a API Key do .env e a passa para todas as páginas via session_state,
-para que as requisições à API sejam autenticadas.
+Lê a API Key do .env e verifica a saúde da API.
 
 Como rodar:
     streamlit run frontend/streamlit_app.py
@@ -12,12 +10,9 @@ Como rodar:
 import os
 import requests
 import streamlit as st
-from dotenv import load_dotenv  # Lê variáveis do .env
+from dotenv import load_dotenv
 
-# Carrega o .env para obter a API Key
 load_dotenv()
-
-# ── Configuração da página ─────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="Face Access System",
@@ -26,47 +21,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── Armazena a API Key no session_state ────────────────────────────────────────
-# session_state persiste entre páginas no Streamlit
-# Todas as páginas podem acessar st.session_state.api_key
-
 if "api_key" not in st.session_state:
     st.session_state.api_key = os.getenv("API_KEY", "")
 
-# ── Cabeçalho ──────────────────────────────────────────────────────────────────
-
 st.title("👤 Face Access System")
-st.markdown("Sistema de reconhecimento facial em tempo real.")
+st.markdown("Reconhecimento facial escolar com controle de acesso por horário.")
 st.divider()
 
 # ── Status da API ──────────────────────────────────────────────────────────────
-
 try:
-    # Envia a API Key no header de todas as requisições
     headers = {"X-API-Key": st.session_state.api_key}
     response = requests.get("http://localhost:8000/health", headers=headers, timeout=2)
     data = response.json()
-
     if response.status_code == 200 and data["status"] == "ok":
         st.success("✅ API conectada | Banco de dados online")
     elif response.status_code == 403:
         st.error("❌ API Key inválida. Verifique o arquivo .env")
     else:
         st.warning("⚠️ API conectada | Banco de dados offline")
-
 except Exception:
-    st.error("❌ API offline — rode: uvicorn app.main:app --reload")
+    st.error("❌ API offline — rode: uvicorn app.main:app --reload --env-file .env")
 
 st.divider()
 
-# ── Menu de navegação ──────────────────────────────────────────────────────────
+# ── Fluxo de uso ─────────────────────────────────────────────────────────────────
+st.markdown("### Ordem de cadastro")
+st.markdown("""
+O sistema segue uma hierarquia. Cadastre nesta ordem:
 
-st.markdown("### Navegue pelas páginas no menu lateral ←")
+1. **🕒 Horários** — defina os turnos (nome + período).
+2. **🏫 Turmas** — crie turmas e vincule cada uma a um horário.
+3. **📸 Cadastrar Aluno** — cadastre o aluno com foto e escolha a turma dele.
+""")
+
+st.divider()
+st.markdown("### Páginas")
 st.markdown("""
 | Página | Descrição |
 |---|---|
-| 📸 **Cadastrar Pessoa** | Envie uma foto para cadastrar uma pessoa no sistema |
-| 🎥 **Câmera Ao Vivo** | Acompanhe o reconhecimento facial em tempo real |
-| 📋 **Histórico** | Veja todos os acessos registrados pelo sistema |
-| 👥 **Pessoas Cadastradas** | Gerencie as pessoas cadastradas no banco |
+| 🕒 **Horários** | Defina os turnos com início e fim |
+| 🏫 **Turmas** | Crie turmas vinculadas a um horário |
+| 📸 **Cadastrar Aluno** | Cadastre alunos com foto e turma |
+| 🎥 **Câmera Ao Vivo** | Reconhecimento e decisão de acesso em tempo real |
+| 📋 **Histórico** | Acessos registrados (liberado/negado) |
+| 👥 **Alunos Cadastrados** | Gerencie alunos e suas turmas |
 """)

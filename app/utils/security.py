@@ -11,9 +11,16 @@ A chave é definida no arquivo .env:
 
 Como gerar uma chave segura pelo terminal:
     python3 -c "import secrets; print(secrets.token_hex(32))"
+
+Nota de segurança: a comparação da chave usa secrets.compare_digest(),
+que leva o mesmo tempo independentemente de onde os bytes diferem.
+Uma comparação comum com '!=' retorna assim que encontra o primeiro byte
+diferente, o que permite (em teoria) um ataque de timing para descobrir
+a chave byte a byte. compare_digest() elimina essa brecha.
 """
 
 import os
+import secrets
 from fastapi import Security, HTTPException, status
 from fastapi.security import APIKeyHeader
 from dotenv import load_dotenv  # Lê as variáveis do arquivo .env
@@ -26,7 +33,6 @@ load_dotenv()
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # Chave secreta lida do .env
-# Se não encontrar no .env, usa um valor padrão fraco (apenas para desenvolvimento)
 API_KEY = os.getenv("API_KEY", "")
 
 
@@ -41,7 +47,8 @@ def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
         @router.get("/rota", dependencies=[Depends(verify_api_key)])
 
     :param api_key: Chave enviada no header X-API-Key
-    :raises HTTPException: 403 se a chave for inválida ou ausente
+    :raises HTTPException: 500 se a chave não estiver configurada no .env
+                           403 se a chave for inválida ou ausente
     """
 
     # Se não há chave configurada no .env, avisa e bloqueia
@@ -51,8 +58,9 @@ def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
             detail="API_KEY não configurada no .env"
         )
 
-    # Se não enviou o header ou a chave está errada
-    if not api_key or api_key != API_KEY:
+    # Comparação em tempo constante (resistente a timing attack).
+    # compare_digest exige uma string não vazia, por isso checamos antes.
+    if not api_key or not secrets.compare_digest(api_key, API_KEY):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="API Key inválida ou ausente. Envie no header: X-API-Key"

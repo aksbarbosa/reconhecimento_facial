@@ -1,53 +1,43 @@
 """
 camera_worker.py
 
-Responsabilidade: Orquestrar o pipeline completo de reconhecimento facial
-em loop contínuo, rodando em background enquanto o sistema estiver ativo.
+Responsabilidade: Orquestrar o pipeline de reconhecimento em loop contínuo,
+em background, decidindo o acesso de cada aluno pelo horário da turma dele.
 
-Sistema de presença:
-    - Salva no banco apenas quando a pessoa APARECE pela primeira vez
-    - Ignora frames subsequentes enquanto a pessoa estiver presente
-    - Só volta a salvar quando a pessoa DESAPARECER e REAPARECER
-    - Usa um contador de ausência para evitar falsos saídas (piscar, virar rosto)
+Recursos:
+    - Modelo compartilhado (app.face.engine) com infer_lock.
+    - Callbacks on_recognized / on_unknown (notificação WebSocket).
+    - Decisão de acesso por janela de horário (app.utils.shifts.evaluate_access),
+      usando inicio/fim que vêm de aluno → turma → horario.
 
-Fluxo:
-    CameraWorker
-        → FrameReader     → captura frame
-        → FaceDetector    → detecta rostos
-        → FaceEmbedder    → gera embeddings
-        → FaceMatcher     → identifica pessoas
-        → PresenceTracker → controla quem está presente
-        → Snapshot        → salva foto se for nova entrada
-        → save_access_log → salva no banco se for nova entrada
+Decisões exibidas/registradas:
+    - rosto não reconhecido          → "Rosto não cadastrado"            (negado)
+    - reconhecido, sem turma/horário → "Reconhecido, mas sem turma/horário definido" (negado)
+    - reconhecido, fora do horário   → "Reconhecido, mas horário não permitido" (negado)
+    - reconhecido, dentro do horário → "Acesso liberado"                (liberado)
 """
 
 import time
 import threading
 import logging
 from datetime import datetime
+from typing import Callable, Optional
 
 from app.camera.frame_reader import FrameReader
 from app.camera.snapshot import Snapshot
-from app.face.detector import FaceDetector
-from app.face.embedder import FaceEmbedder
 from app.face.matcher import FaceMatcher
+from app.face.engine import get_detector, get_embedder, infer_lock
+from app.utils.shifts import evaluate_access
 from app.db.models import save_access_log
 
 logger = logging.getLogger(__name__)
 
-# Número de frames consecutivos sem detectar a pessoa para considerá-la ausente
-# Com frame_interval=0.1s, 10 frames = 1 segundo de ausência antes de resetar
+# Frames consecutivos sem detectar o aluno para considerá-lo ausente
 FRAMES_PARA_SAIR = 10
 
 
 class CameraWorker:
-    """
-    Orquestra o pipeline completo de reconhecimento facial em loop contínuo.
-    Roda em uma thread separada (background) para não bloquear a API.
-
-    Usa um sistema de rastreamento de presença para salvar no banco
-    apenas quando uma pessoa aparece — não a cada frame detectado.
-    """
+    """Pipeline de reconhecimento em thread de background, com acesso por horário."""
 
     def __init__(
         self,
@@ -59,67 +49,53 @@ class CameraWorker:
         threshold: float = 0.6,
         frame_interval: float = 0.1,
         save_unknown: bool = True,
+        on_recognized: Optional[Callable] = None,
+        on_unknown: Optional[Callable] = None,
     ):
-        """
-        Inicializa o worker com todos os módulos do pipeline.
-
-        :param camera_source:  Índice da câmera local (0) ou URL RTSP da câmera IP
-        :param candidates:     Lista de cadastros do banco para comparação
-        :param model_root:     Pasta dos modelos InsightFace
-        :param snapshot_dir:   Pasta para salvar snapshots de rostos identificados
-        :param frames_dir:     Pasta para salvar frames de rostos desconhecidos
-        :param threshold:      Limiar de similaridade para identificação (padrão: 0.6)
-        :param frame_interval: Intervalo em segundos entre cada frame processado
-        :param save_unknown:   Se True, salva imagens de rostos não identificados
-        """
-
         self.camera_source  = camera_source
         self.candidates     = candidates
         self.frame_interval = frame_interval
         self.save_unknown   = save_unknown
 
-        # Captura frames da câmera via OpenCV
+        self.on_recognized = on_recognized
+        self.on_unknown    = on_unknown
+
         self.frame_reader = FrameReader(camera_source)
 
-        # Detecta rostos nos frames via InsightFace
-        self.detector = FaceDetector(model_root=model_root)
+        # Modelo compartilhado (carregado uma única vez no engine)
+        self.detector = get_detector(model_root=model_root)
+        self.embedder = get_embedder()
+        self.matcher  = FaceMatcher(threshold=threshold)
 
-        # Gera embeddings (vetores) dos rostos detectados
-        self.embedder = FaceEmbedder()
-
-        # Compara embeddings com os cadastros do banco
-        self.matcher = FaceMatcher(threshold=threshold)
-
-        # Salva imagens de rostos identificados em disco
         self.snapshot = Snapshot(output_dir=snapshot_dir)
-
-        # Salva imagens de rostos desconhecidos em disco
         self.snapshot_unknown = Snapshot(output_dir=frames_dir)
 
-        # ── Sistema de rastreamento de presença ────────────────────────────
-        #
-        # Dicionário que rastreia quem está presente no momento.
-        # Chave: person_id
-        # Valor: número de frames consecutivos sem detectar a pessoa
-        #
-        # Exemplo:
-        #   {1: 0}  → Filipe está presente, 0 frames sem detectar
-        #   {1: 5}  → Filipe não foi detectado nos últimos 5 frames
-        #   {}      → ninguém presente no momento
+        # Mapa aluno_id → dados de acesso (janela de horário + nomes),
+        # montado a partir dos candidatos. Evita carregar o turno no MatchResult.
+        self._info_by_aluno = self._build_info_map(candidates)
+
+        # Rastreamento de presença: aluno_id → frames sem detecção
         self._presentes: dict = {}
 
-        # Controle da thread
         self._running = False
         self._thread  = None
-
-        # Último resultado de reconhecimento (para a API consultar)
         self.last_result = None
 
-    def start(self):
-        """
-        Inicia o worker em uma thread de background.
-        """
+    @staticmethod
+    def _build_info_map(candidates: list) -> dict:
+        """Monta {aluno_id: {inicio, fim, turma_nome, horario_nome}}."""
+        info = {}
+        for c in candidates:
+            info[c["aluno_id"]] = {
+                "inicio":       c.get("inicio"),
+                "fim":          c.get("fim"),
+                "turma_nome":   c.get("turma_nome"),
+                "horario_nome": c.get("horario_nome"),
+            }
+        return info
 
+    def start(self):
+        """Inicia o worker em uma thread de background."""
         if not self.frame_reader.is_opened():
             logger.error(f"Falha ao abrir a câmera: {self.camera_source}")
             return
@@ -132,175 +108,140 @@ class CameraWorker:
         self._thread.start()
 
     def stop(self):
-        """
-        Encerra o loop de captura e libera os recursos da câmera.
-        """
-
+        """Encerra o loop de captura e libera os recursos da câmera."""
         logger.info("Encerrando CameraWorker...")
-
         self._running = False
-
         if self._thread is not None:
             self._thread.join(timeout=5)
-
         self.frame_reader.release()
         logger.info("CameraWorker encerrado.")
 
     def _loop(self):
-        """
-        Loop principal do worker.
-
-        A cada iteração:
-            1. Captura um frame da câmera
-            2. Detecta rostos no frame
-            3. Para cada rosto reconhecido: verifica se é nova entrada
-            4. Atualiza o rastreador de presença
-            5. Aguarda o intervalo configurado
-        """
-
+        """Loop principal do worker."""
         logger.info("Loop de captura iniciado.")
 
         while self._running:
 
-            # ── 1. Captura o frame ─────────────────────────────────────────
-
             frame_bgr, frame_rgb = self.frame_reader.read_frame()
-
             if frame_bgr is None:
                 logger.warning("Frame não capturado. Tentando novamente...")
                 time.sleep(1)
                 continue
 
-            # ── 2. Detecta rostos no frame ─────────────────────────────────
+            with infer_lock:
+                result = self.detector.process_frame(frame_bgr, frame_rgb)
 
-            result = self.detector.process_frame(frame_bgr, frame_rgb)
-
-            # IDs das pessoas detectadas neste frame
-            # Usado para atualizar o rastreador de presença ao final
             ids_detectados_neste_frame = set()
 
             if result["has_faces"]:
 
-                # ── 3. Processa cada rosto detectado ───────────────────────
-
                 for i, face in enumerate(result["faces"]):
-
                     crop = result["crops"][i]
 
-                    # Gera o embedding do rosto
                     embedding = self.embedder.get_embedding(face)
-
                     if embedding is None or not self.embedder.is_valid(embedding):
                         logger.warning(f"Embedding inválido para o rosto {i}. Pulando.")
                         continue
 
-                    # Compara com o banco de dados
                     match = self.matcher.match(embedding, self.candidates)
-
                     timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
+                    # ── Decide o acesso pela janela de horário da turma ────
+                    info = self._info_by_aluno.get(match.aluno_id, {}) if match.matched else {}
+                    inicio = info.get("inicio")
+                    fim    = info.get("fim")
+                    access = evaluate_access(match.matched, inicio, fim)
+
+                    resultado = {
+                        "matched":        match.matched,
+                        "aluno_id":       match.aluno_id,
+                        "aluno_nome":     match.aluno_nome,
+                        "turma_nome":     info.get("turma_nome"),
+                        "horario_nome":   info.get("horario_nome"),
+                        "similarity":     match.similarity,
+                        "status":         access["status"],
+                        "access_granted": access["access_granted"],
+                        "message":        access["message"],
+                        "timestamp":      timestamp,
+                    }
+
+                    # A tela ao vivo sempre mostra o rosto mais recente
+                    self.last_result = resultado
+
                     if match.matched:
+                        ids_detectados_neste_frame.add(match.aluno_id)
 
-                        # Marca esta pessoa como detectada neste frame
-                        ids_detectados_neste_frame.add(match.person_id)
-
-                        # ── Verifica se é nova entrada ─────────────────────
-                        #
-                        # A pessoa é considerada "nova entrada" se:
-                        #   1. Não estava na lista de presentes (chegou agora)
-                        #   2. Estava na lista mas o contador zerou (voltou após sair)
-                        #
-                        # Só salva no banco em caso de nova entrada
-                        if match.person_id not in self._presentes:
-
+                        # Loga/notifica só na NOVA entrada
+                        if match.aluno_id not in self._presentes:
+                            estado = "LIBERADO" if access["access_granted"] else "NEGADO"
                             logger.info(
-                                f"🚪 Nova entrada: {match.person_name} "
-                                f"(Similaridade: {match.similarity:.0%})"
+                                f"🚪 Nova entrada: {match.aluno_nome} | {estado} "
+                                f"({access['message']}, sim: {match.similarity:.0%})"
                             )
 
-                            # Salva a foto do rosto identificado
                             filename = (
-                                f"{match.person_id}_{match.person_name}_"
+                                f"{match.aluno_id}_{match.aluno_nome}_"
                                 f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
                             )
                             saved_path = self.snapshot.save(crop, filename)
+                            resultado["image_path"] = saved_path
 
-                            # Salva o log no banco — só acontece na entrada
                             try:
                                 save_access_log(
-                                    person_id=match.person_id,
+                                    aluno_id=match.aluno_id,
                                     similarity=match.similarity,
-                                    image_path=saved_path
+                                    access_granted=access["access_granted"],
+                                    image_path=saved_path,
                                 )
                             except Exception as e:
                                 logger.error(f"Erro ao salvar log: {e}")
 
-                            # Adiciona à lista de presentes com contador zerado
-                            # 0 = acabou de ser detectado, nenhum frame de ausência
-                            self._presentes[match.person_id] = 0
-
+                            self._presentes[match.aluno_id] = 0
+                            self._fire(self.on_recognized, resultado)
                         else:
-                            # Pessoa já estava presente — reseta o contador de ausência
-                            # pois foi detectada neste frame
-                            self._presentes[match.person_id] = 0
-                            logger.debug(f"👤 Presente: {match.person_name}")
-
-                        # Atualiza o último resultado para a API
-                        self.last_result = {
-                            "matched":     match.matched,
-                            "person_id":   match.person_id,
-                            "person_name": match.person_name,
-                            "similarity":  match.similarity,
-                            "timestamp":   timestamp,
-                        }
+                            self._presentes[match.aluno_id] = 0
+                            logger.debug(f"👤 Presente: {match.aluno_nome}")
 
                     else:
-                        # Rosto desconhecido
                         logger.info(f"❓ Desconhecido (similaridade: {match.similarity:.0%})")
-
+                        saved_path = None
                         if self.save_unknown:
                             filename = f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
-                            self.snapshot_unknown.save(crop, filename)
+                            saved_path = self.snapshot_unknown.save(crop, filename)
+                        resultado["image_path"] = saved_path
+                        self._fire(self.on_unknown, resultado)
 
-            # ── 4. Atualiza o rastreador de presença ───────────────────────
-            #
-            # Para cada pessoa que estava presente mas NÃO foi detectada
-            # neste frame, incrementa o contador de ausência.
-            # Quando o contador atingir FRAMES_PARA_SAIR, remove da lista.
-
-            for person_id in list(self._presentes.keys()):
-
-                if person_id not in ids_detectados_neste_frame:
-
-                    # Incrementa o contador de frames sem detectar esta pessoa
-                    self._presentes[person_id] += 1
-
-                    if self._presentes[person_id] >= FRAMES_PARA_SAIR:
-                        # Pessoa ausente por frames suficientes — considera que saiu
-                        logger.info(
-                            f"🚶 Saiu do campo: pessoa ID {person_id} "
-                            f"(ausente por {FRAMES_PARA_SAIR} frames)"
-                        )
-                        # Remove da lista — próxima detecção será nova entrada
-                        del self._presentes[person_id]
-
-            # ── 5. Aguarda antes do próximo frame ──────────────────────────
+            # ── Atualiza o rastreador de presença ──────────────────────────
+            for aluno_id in list(self._presentes.keys()):
+                if aluno_id not in ids_detectados_neste_frame:
+                    self._presentes[aluno_id] += 1
+                    if self._presentes[aluno_id] >= FRAMES_PARA_SAIR:
+                        logger.info(f"🚶 Saiu do campo: aluno ID {aluno_id}")
+                        del self._presentes[aluno_id]
 
             time.sleep(self.frame_interval)
 
         logger.info("Loop de captura encerrado.")
+
+    @staticmethod
+    def _fire(callback: Optional[Callable], payload: dict):
+        """Dispara um callback com proteção contra exceções."""
+        if callback is None:
+            return
+        try:
+            callback(payload)
+        except Exception as e:
+            logger.error(f"Erro ao disparar callback de notificação: {e}")
 
     def get_last_result(self) -> dict:
         """Retorna o último resultado de reconhecimento."""
         return self.last_result
 
     def update_candidates(self, new_candidates: list):
-        """
-        Atualiza a lista de candidatos sem reiniciar o worker.
-        Chamado quando uma nova pessoa é cadastrada durante o uso.
-        """
+        """Atualiza candidatos e o mapa de horários sem reiniciar o worker."""
         self.candidates = new_candidates
-        logger.info(f"Candidatos atualizados: {len(new_candidates)} pessoa(s).")
+        self._info_by_aluno = self._build_info_map(new_candidates)
+        logger.info(f"Candidatos atualizados: {len(new_candidates)} aluno(s).")
 
     @property
     def is_running(self) -> bool:
