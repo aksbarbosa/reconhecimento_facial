@@ -113,7 +113,7 @@ CREATE DATABASE face_access;
 
 A partir da raiz do projeto:
 ```bash
-psql -U filipe -d face_access -f scripts/init_db.sql
+psql -U seu_usuario -d face_access -f scripts/init_db.sql
 ```
 
 Você deve ver cinco `CREATE TABLE` e a mensagem "Banco criado com sucesso".
@@ -133,7 +133,7 @@ O `.env` precisa conter:
 DB_HOST=127.0.0.1
 DB_PORT=5432
 DB_NAME=face_access
-DB_USER=filipe
+DB_USER=seu_usuario
 DB_PASSWORD=suasenha
 API_KEY=cole_aqui_uma_chave_gerada
 ```
@@ -308,9 +308,9 @@ access_logs      → histórico de reconhecimentos, com resultado de acesso
 ### Ver os dados no terminal
 
 ```bash
-psql -U filipe -d face_access -c "SELECT * FROM horarios;"
-psql -U filipe -d face_access -c "SELECT id, nome, turma_id FROM alunos;"
-psql -U filipe -d face_access -c "SELECT * FROM turmas;"
+psql -U seu_usuario -d face_access -c "SELECT * FROM horarios;"
+psql -U seu_usuario -d face_access -c "SELECT id, nome, turma_id FROM alunos;"
+psql -U seu_usuario -d face_access -c "SELECT * FROM turmas;"
 ```
 
 Evite `SELECT *` em `face_embeddings` — a coluna de embedding é binária e enche
@@ -339,8 +339,8 @@ Existem tabelas antigas no banco. Como o `init_db.sql` usa
 misturado. Se não há dados a preservar, zere tudo e recrie:
 
 ```bash
-psql -U filipe -d face_access -c "DROP TABLE IF EXISTS access_logs, face_embeddings, alunos, turmas, horarios, persons CASCADE;"
-psql -U filipe -d face_access -f scripts/init_db.sql
+psql -U seu_usuario -d face_access -c "DROP TABLE IF EXISTS access_logs, face_embeddings, alunos, turmas, horarios, persons CASCADE;"
+psql -U seu_usuario -d face_access -f scripts/init_db.sql
 ```
 
 Na segunda vez você deve ver cinco `CREATE TABLE` **sem** nenhum NOTICE.
