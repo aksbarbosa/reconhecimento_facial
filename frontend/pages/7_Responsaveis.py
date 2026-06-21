@@ -77,10 +77,18 @@ def criar_responsavel(nome: str, email: str, senha: str) -> tuple[bool, str]:
             "user_metadata": {"name": nome},
         })
         uid = res.user.id
-        supabase.table("profiles").insert({"id": uid, "name": nome}).execute()
-        return True, uid
     except Exception as e:
-        return False, str(e)
+        msg = str(e)
+        if "already registered" in msg or "already been registered" in msg or "already exists" in msg:
+            return False, "already registered"
+        return False, msg
+
+    try:
+        supabase.table("profiles").upsert({"id": uid, "name": nome}).execute()
+    except Exception:
+        pass  # perfil já existe, ignora
+
+    return True, uid
 
 
 def criar_dependente_supabase(profile_id: str, nome: str) -> str | None:
