@@ -139,23 +139,35 @@ def delete_turma(turma_id: int) -> bool:
 # ALUNOS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def create_aluno(nome: str, turma_id: int = None) -> dict:
+def create_aluno(nome: str, turma_id: int = None,
+                 supabase_dependent_id: str = None) -> dict:
     """
-    Cadastra um aluno, opcionalmente vinculado a uma turma.
-
-    :param nome:     Nome do aluno
-    :param turma_id: ID da turma (pode ser None se ainda não tiver turma)
-    :return:         Dicionário com os dados do aluno criado
+    Cadastra um aluno, opcionalmente vinculado a uma turma e a um
+    dependente no Supabase/FaceNotify (supabase_dependent_id = UUID do
+    dependente usado para disparar notificações push).
     """
     with get_cursor(commit=True) as cursor:
         cursor.execute(
-            "INSERT INTO alunos (nome, turma_id) VALUES (%s, %s) RETURNING *;",
-            (nome, turma_id)
+            """
+            INSERT INTO alunos (nome, turma_id, supabase_dependent_id)
+            VALUES (%s, %s, %s) RETURNING *;
+            """,
+            (nome, turma_id, supabase_dependent_id)
         )
         aluno = dict(cursor.fetchone())
 
     print(f"✅ Aluno cadastrado: {aluno['nome']} (ID: {aluno['id']}, turma: {turma_id})")
     return aluno
+
+
+def update_aluno_dependent_id(aluno_id: int, supabase_dependent_id: str) -> bool:
+    """Vincula um aluno ao dependente correspondente no Supabase/FaceNotify."""
+    with get_cursor(commit=True) as cursor:
+        cursor.execute(
+            "UPDATE alunos SET supabase_dependent_id = %s WHERE id = %s;",
+            (supabase_dependent_id, aluno_id)
+        )
+        return cursor.rowcount > 0
 
 
 def update_aluno_turma(aluno_id: int, turma_id: int) -> bool:
@@ -262,6 +274,7 @@ def get_all_embeddings() -> list:
         cursor.execute(
             """
             SELECT fe.id, fe.aluno_id, a.nome AS aluno_nome,
+                   a.supabase_dependent_id,
                    t.nome AS turma_nome,
                    h.nome AS horario_nome, h.inicio, h.fim,
                    fe.embedding, fe.image_path
@@ -279,15 +292,16 @@ def get_all_embeddings() -> list:
         row = dict(row)
         embedding_array = np.frombuffer(row["embedding"], dtype=np.float32)
         candidates.append({
-            "id":           row["id"],
-            "aluno_id":     row["aluno_id"],
-            "aluno_nome":   row["aluno_nome"],
-            "turma_nome":   row["turma_nome"],
-            "horario_nome": row["horario_nome"],
-            "inicio":       row["inicio"],     # datetime.time ou None
-            "fim":          row["fim"],        # datetime.time ou None
-            "embedding":    embedding_array,
-            "image_path":   row["image_path"],
+            "id":                     row["id"],
+            "aluno_id":               row["aluno_id"],
+            "aluno_nome":             row["aluno_nome"],
+            "supabase_dependent_id":  row["supabase_dependent_id"],
+            "turma_nome":             row["turma_nome"],
+            "horario_nome":           row["horario_nome"],
+            "inicio":                 row["inicio"],
+            "fim":                    row["fim"],
+            "embedding":              embedding_array,
+            "image_path":             row["image_path"],
         })
     return candidates
 

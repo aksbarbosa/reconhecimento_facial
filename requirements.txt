@@ -1,0 +1,13 @@
+opencv-python
+insightface
+onnxruntime
+numpy
+fastapi
+uvicorn
+psycopg2-binary
+python-multipart
+python-dotenv
+streamlit
+requests
+pandas
+httpx

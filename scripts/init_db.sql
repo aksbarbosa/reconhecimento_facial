@@ -42,10 +42,11 @@ CREATE TABLE IF NOT EXISTS turmas (
 -- sem turma (e, sem turma, o acesso é negado, pois não há horário associado).
 
 CREATE TABLE IF NOT EXISTS alunos (
-    id         SERIAL PRIMARY KEY,
-    nome       VARCHAR(100) NOT NULL,
-    turma_id   INTEGER REFERENCES turmas(id) ON DELETE SET NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    id                    SERIAL PRIMARY KEY,
+    nome                  VARCHAR(100) NOT NULL,
+    turma_id              INTEGER REFERENCES turmas(id) ON DELETE SET NULL,
+    supabase_dependent_id UUID,        -- UUID do dependente no Supabase/FaceNotify
+    created_at            TIMESTAMP DEFAULT NOW()
 );
 
 -- ── 4. FACE EMBEDDINGS ───────────────────────────────────────────────────────────

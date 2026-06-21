@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from app.services.aluno_service import AlunoService
 from app.db.models import (
     get_all_alunos, get_aluno_by_id, delete_aluno,
-    update_aluno_turma, get_turma_by_id
+    update_aluno_turma, update_aluno_dependent_id, get_turma_by_id
 )
 from app.utils.security import verify_api_key
 
@@ -52,6 +52,7 @@ def _reload_camera_candidates():
 async def register_aluno(
     nome: str = Form(...),
     turma_id: Optional[int] = Form(None),
+    supabase_dependent_id: Optional[str] = Form(None),
     file: UploadFile = File(...)
 ):
     """Cadastra um aluno a partir de uma foto. Requer X-API-Key."""
@@ -77,14 +78,19 @@ async def register_aluno(
         f.write(contents)
 
     try:
-        result = aluno_service.register_from_image(nome, image_path, turma_id=turma_id)
+        result = aluno_service.register_from_image(
+            nome, image_path,
+            turma_id=turma_id,
+            supabase_dependent_id=supabase_dependent_id,
+        )
         _reload_camera_candidates()
         return {
-            "message":    f"Aluno '{nome}' cadastrado com sucesso!",
-            "aluno_id":   result["aluno"]["id"],
-            "aluno_nome": result["aluno"]["nome"],
-            "turma_id":   result["aluno"]["turma_id"],
-            "confidence": f"{result['confidence']:.0%}",
+            "message":                f"Aluno '{nome}' cadastrado com sucesso!",
+            "aluno_id":               result["aluno"]["id"],
+            "aluno_nome":             result["aluno"]["nome"],
+            "turma_id":               result["aluno"]["turma_id"],
+            "supabase_dependent_id":  result["aluno"].get("supabase_dependent_id"),
+            "confidence":             f"{result['confidence']:.0%}",
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -106,6 +112,16 @@ def get_aluno(aluno_id: int):
     if not aluno:
         raise HTTPException(status_code=404, detail=f"Aluno ID {aluno_id} não encontrado.")
     return aluno
+
+
+@router.patch("/{aluno_id}/dependent")
+def link_dependent(aluno_id: int, supabase_dependent_id: str = Form(...)):
+    """Vincula um aluno ao dependente correspondente no Supabase/FaceNotify."""
+    updated = update_aluno_dependent_id(aluno_id, supabase_dependent_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Aluno ID {aluno_id} não encontrado.")
+    _reload_camera_candidates()
+    return {"message": f"Aluno ID {aluno_id} vinculado ao dependente {supabase_dependent_id}."}
 
 
 @router.patch("/{aluno_id}/turma")

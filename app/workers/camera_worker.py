@@ -29,6 +29,7 @@ from app.face.matcher import FaceMatcher
 from app.face.engine import get_detector, get_embedder, infer_lock
 from app.utils.shifts import evaluate_access
 from app.db.models import save_access_log
+from app.services.notify_service import notify_recognition
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +84,15 @@ class CameraWorker:
 
     @staticmethod
     def _build_info_map(candidates: list) -> dict:
-        """Monta {aluno_id: {inicio, fim, turma_nome, horario_nome}}."""
+        """Monta {aluno_id: {inicio, fim, turma_nome, horario_nome, supabase_dependent_id}}."""
         info = {}
         for c in candidates:
             info[c["aluno_id"]] = {
-                "inicio":       c.get("inicio"),
-                "fim":          c.get("fim"),
-                "turma_nome":   c.get("turma_nome"),
-                "horario_nome": c.get("horario_nome"),
+                "inicio":                c.get("inicio"),
+                "fim":                   c.get("fim"),
+                "turma_nome":            c.get("turma_nome"),
+                "horario_nome":          c.get("horario_nome"),
+                "supabase_dependent_id": c.get("supabase_dependent_id"),
             }
         return info
 
@@ -153,16 +155,17 @@ class CameraWorker:
                     access = evaluate_access(match.matched, inicio, fim)
 
                     resultado = {
-                        "matched":        match.matched,
-                        "aluno_id":       match.aluno_id,
-                        "aluno_nome":     match.aluno_nome,
-                        "turma_nome":     info.get("turma_nome"),
-                        "horario_nome":   info.get("horario_nome"),
-                        "similarity":     match.similarity,
-                        "status":         access["status"],
-                        "access_granted": access["access_granted"],
-                        "message":        access["message"],
-                        "timestamp":      timestamp,
+                        "matched":                match.matched,
+                        "aluno_id":               match.aluno_id,
+                        "aluno_nome":             match.aluno_nome,
+                        "supabase_dependent_id":  info.get("supabase_dependent_id"),
+                        "turma_nome":             info.get("turma_nome"),
+                        "horario_nome":           info.get("horario_nome"),
+                        "similarity":             match.similarity,
+                        "status":                 access["status"],
+                        "access_granted":         access["access_granted"],
+                        "message":                access["message"],
+                        "timestamp":              timestamp,
                     }
 
                     # A tela ao vivo sempre mostra o rosto mais recente
@@ -195,6 +198,8 @@ class CameraWorker:
                                 )
                             except Exception as e:
                                 logger.error(f"Erro ao salvar log: {e}")
+
+                            notify_recognition(resultado)
 
                             self._presentes[match.aluno_id] = 0
                             self._fire(self.on_recognized, resultado)

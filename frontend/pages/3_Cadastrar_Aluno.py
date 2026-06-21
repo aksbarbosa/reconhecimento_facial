@@ -28,6 +28,11 @@ def carregar_turmas():
 turmas = carregar_turmas()
 
 nome = st.text_input("Nome do aluno", placeholder="Ex: Filipe Silva")
+supabase_dependent_id = st.text_input(
+    "ID do Dependente no FaceNotify (opcional)",
+    placeholder="Ex: 670de595-87d6-4e6b-95b9-92808933c87f",
+    help="UUID do dependente cadastrado no Supabase/FaceNotify. Necessário para enviar notificações."
+)
 
 if not turmas:
     st.warning("⚠️ Cadastre ao menos uma turma antes (página **Turmas**).")
@@ -64,10 +69,13 @@ pode_cadastrar = bool(nome and foto_bytes and turma_id)
 if st.button("✅ Cadastrar Aluno", type="primary", disabled=not pode_cadastrar, use_container_width=True):
     with st.spinner("Detectando rosto e cadastrando..."):
         try:
+            data = {"nome": nome, "turma_id": turma_id}
+            if supabase_dependent_id.strip():
+                data["supabase_dependent_id"] = supabase_dependent_id.strip()
             resp = requests.post(
                 f"{API}/alunos/register",
                 headers=HEADERS,
-                data={"nome": nome, "turma_id": turma_id},
+                data=data,
                 files={"file": (foto_nome, foto_bytes, foto_tipo)}
             )
             if resp.status_code == 200:

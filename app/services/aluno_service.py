@@ -43,7 +43,8 @@ class AlunoService:
         logger.info("AlunoService inicializado.")
 
     def register_from_image(self, nome: str, image_path: str,
-                            turma_id: int = None) -> dict:
+                            turma_id: int = None,
+                            supabase_dependent_id: str = None) -> dict:
         """
         Cadastra um aluno a partir de uma imagem em disco.
 
@@ -53,7 +54,10 @@ class AlunoService:
         :return:           Dicionário com os dados do aluno cadastrado
         :raises ValueError: se não encontrar rosto ou o embedding for inválido
         """
-        logger.info(f"Cadastrando aluno: {nome} | turma: {turma_id} | Imagem: {image_path}")
+        logger.info(
+            f"Cadastrando aluno: {nome} | turma: {turma_id} "
+            f"| dependent: {supabase_dependent_id} | Imagem: {image_path}"
+        )
 
         image_bgr = cv2.imread(image_path)
         if image_bgr is None:
@@ -81,8 +85,8 @@ class AlunoService:
         crop_path = os.path.join(PROCESSED_DIR, crop_filename)
         cv2.imwrite(crop_path, crop)
 
-        # Salva no banco (aluno + embedding)
-        aluno = create_aluno(nome, turma_id=turma_id)
+        aluno = create_aluno(nome, turma_id=turma_id,
+                             supabase_dependent_id=supabase_dependent_id)
         save_embedding(
             aluno_id=aluno["id"],
             embedding=embedding,
