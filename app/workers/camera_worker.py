@@ -84,15 +84,15 @@ class CameraWorker:
 
     @staticmethod
     def _build_info_map(candidates: list) -> dict:
-        """Monta {aluno_id: {inicio, fim, turma_nome, horario_nome, supabase_dependent_id}}."""
+        """Monta {aluno_id: {inicio, fim, turma_nome, horario_nome, dependent_ids}}."""
         info = {}
         for c in candidates:
             info[c["aluno_id"]] = {
-                "inicio":                c.get("inicio"),
-                "fim":                   c.get("fim"),
-                "turma_nome":            c.get("turma_nome"),
-                "horario_nome":          c.get("horario_nome"),
-                "supabase_dependent_id": c.get("supabase_dependent_id"),
+                "inicio":        c.get("inicio"),
+                "fim":           c.get("fim"),
+                "turma_nome":    c.get("turma_nome"),
+                "horario_nome":  c.get("horario_nome"),
+                "dependent_ids": c.get("dependent_ids", []),
             }
         return info
 
