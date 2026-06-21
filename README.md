@@ -213,6 +213,8 @@ Ao reconhecer um rosto dentro do horário da turma, o sistema:
 
 ## Integração com FaceNotify
 
+App mobile: **https://github.com/aksbarbosa/facenotify**
+
 Veja `docs/arquitetura.md` para o pipeline completo e o README do FaceNotify para a configuração do app mobile.
 
 O arquivo `app/services/notify_service.py` é responsável por enviar cada reconhecimento para a Supabase Edge Function. Ele aplica um **cooldown de 30 segundos por pessoa por câmera** para evitar notificações duplicadas.
