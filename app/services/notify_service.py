@@ -98,19 +98,26 @@ def notify_recognition(resultado: dict) -> None:
         )
         return
 
-    camera_id = _CAMERA_LOCATION["camera_id"]
-    now = time.monotonic()
+    camera_id    = _CAMERA_LOCATION["camera_id"]
+    now          = time.monotonic()
+    access_ok    = resultado.get("access_granted", True)
 
     for dependent_id in dependent_ids:
         cooldown_key = (dependent_id, camera_id)
-        last = _last_sent.get(cooldown_key, 0.0)
-        if now - last < _COOLDOWN_SECONDS:
-            remaining = int(_COOLDOWN_SECONDS - (now - last))
-            logger.debug(
-                f"Cooldown ativo para '{resultado.get('aluno_nome')}' "
-                f"(dependent {dependent_id}) em '{camera_id}' — "
-                f"próxima em {remaining}s."
-            )
-            continue
-        _last_sent[cooldown_key] = now
-        _send_to_edge(dependent_id, resultado)
+
+        if access_ok:
+            # Acesso liberado: sempre notifica, reseta o cooldown
+            _last_sent[cooldown_key] = now
+            _send_to_edge(dependent_id, resultado)
+        else:
+            # Acesso negado: respeita o cooldown de 30 s
+            last = _last_sent.get(cooldown_key, 0.0)
+            if now - last < _COOLDOWN_SECONDS:
+                remaining = int(_COOLDOWN_SECONDS - (now - last))
+                logger.debug(
+                    f"Cooldown ativo (negado) para '{resultado.get('aluno_nome')}' "
+                    f"em '{camera_id}' — próxima em {remaining}s."
+                )
+                continue
+            _last_sent[cooldown_key] = now
+            _send_to_edge(dependent_id, resultado)
