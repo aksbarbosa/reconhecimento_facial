@@ -154,6 +154,7 @@ serve(async (req) => {
     event_id:       event?.id ?? '',
     person_name,
     camera_label:   location.camera_label,
+    location:       JSON.stringify(location),
     timestamp,
     confidence:     String(confidence),
     access_granted: String(access_granted),
