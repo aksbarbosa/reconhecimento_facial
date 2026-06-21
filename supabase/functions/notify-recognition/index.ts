@@ -100,7 +100,7 @@ serve(async (req) => {
   }
 
   const payload = await req.json();
-  const { person_id, person_name, location, timestamp, confidence } = payload;
+  const { person_id, person_name, location, timestamp, confidence, access_granted = true } = payload;
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -148,14 +148,15 @@ serve(async (req) => {
 
   // 5. Envia push via FCM v1
   const accessToken = await getFCMAccessToken();
-  const notifTitle  = 'Reconhecimento detectado';
+  const notifTitle  = access_granted ? '✅ Acesso liberado' : '⚠️ Acesso negado';
   const notifBody   = `${person_name} · ${location.camera_label} · ${location.city}, ${location.state}`;
   const notifData   = {
-    event_id:     event?.id ?? '',
+    event_id:       event?.id ?? '',
     person_name,
-    camera_label: location.camera_label,
+    camera_label:   location.camera_label,
     timestamp,
-    confidence:   String(confidence),
+    confidence:     String(confidence),
+    access_granted: String(access_granted),
   };
 
   const results = await Promise.allSettled(

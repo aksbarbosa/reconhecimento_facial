@@ -43,11 +43,12 @@ _CAMERA_LOCATION = {
 def _send_to_edge(dependent_id: str, resultado: dict) -> None:
     """Envia um evento para a Edge Function para um único dependent_id."""
     payload = {
-        "person_id":   dependent_id,
-        "person_name": resultado.get("aluno_nome", ""),
-        "location":    _CAMERA_LOCATION,
-        "timestamp":   datetime.now(timezone.utc).isoformat(),
-        "confidence":  round(float(resultado.get("similarity", 0)), 4),
+        "person_id":      dependent_id,
+        "person_name":    resultado.get("aluno_nome", ""),
+        "location":       _CAMERA_LOCATION,
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "confidence":     round(float(resultado.get("similarity", 0)), 4),
+        "access_granted": resultado.get("access_granted", True),
     }
     try:
         response = httpx.post(

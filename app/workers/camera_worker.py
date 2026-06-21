@@ -155,17 +155,17 @@ class CameraWorker:
                     access = evaluate_access(match.matched, inicio, fim)
 
                     resultado = {
-                        "matched":                match.matched,
-                        "aluno_id":               match.aluno_id,
-                        "aluno_nome":             match.aluno_nome,
-                        "supabase_dependent_id":  info.get("supabase_dependent_id"),
-                        "turma_nome":             info.get("turma_nome"),
-                        "horario_nome":           info.get("horario_nome"),
-                        "similarity":             match.similarity,
-                        "status":                 access["status"],
-                        "access_granted":         access["access_granted"],
-                        "message":                access["message"],
-                        "timestamp":              timestamp,
+                        "matched":        match.matched,
+                        "aluno_id":       match.aluno_id,
+                        "aluno_nome":     match.aluno_nome,
+                        "dependent_ids":  info.get("dependent_ids", []),
+                        "turma_nome":     info.get("turma_nome"),
+                        "horario_nome":   info.get("horario_nome"),
+                        "similarity":     match.similarity,
+                        "status":         access["status"],
+                        "access_granted": access["access_granted"],
+                        "message":        access["message"],
+                        "timestamp":      timestamp,
                     }
 
                     # A tela ao vivo sempre mostra o rosto mais recente
