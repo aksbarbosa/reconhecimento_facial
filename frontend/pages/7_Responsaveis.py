@@ -106,11 +106,9 @@ def criar_dependente_supabase(profile_id: str, nome: str) -> str | None:
 def remover_dependente(dep_id: str, aluno_id: int | None = None) -> bool:
     try:
         supabase.table("dependents").delete().eq("id", dep_id).execute()
-        # Limpa o vínculo no Face Access
         if aluno_id:
-            requests.patch(
-                f"{API}/alunos/{aluno_id}/vincular",
-                data={"supabase_dependent_id": ""},
+            requests.delete(
+                f"{API}/alunos/{aluno_id}/dependent/{dep_id}",
                 headers=HEADERS, timeout=5
             )
         return True
@@ -138,10 +136,10 @@ def carregar_alunos() -> list:
 
 
 def vincular_aluno(aluno_id: int, dep_uuid: str) -> bool:
-    """Salva o supabase_dependent_id no aluno do Face Access."""
+    """Adiciona vínculo aluno↔dependente na junction table do Face Access."""
     try:
         r = requests.patch(
-            f"{API}/alunos/{aluno_id}/vincular",
+            f"{API}/alunos/{aluno_id}/dependent",
             data={"supabase_dependent_id": dep_uuid},
             headers=HEADERS, timeout=5
         )
@@ -163,11 +161,10 @@ with aba_lista:
     responsaveis = carregar_responsaveis()
     alunos_todos = carregar_alunos()
 
-    # Alunos disponíveis para vínculo (sem dependente ainda)
-    alunos_livres = [a for a in alunos_todos if not a.get("supabase_dependent_id")]
+    # Todos os alunos ficam disponíveis — um aluno pode ter vários responsáveis
     opcoes_alunos = {
         f"{a['nome']}  ({a.get('turma_nome') or 'sem turma'})": a
-        for a in alunos_livres
+        for a in alunos_todos
     }
 
     if not responsaveis:
@@ -186,9 +183,9 @@ with aba_lista:
                         st.caption("Nenhum dependente vinculado.")
                     else:
                         for dep in resp["dependents"]:
-                            # Descobre se há aluno vinculado a este dependente
+                            # Descobre o aluno vinculado a este dependente via junction table
                             aluno_vinc = next(
-                                (a for a in alunos_todos if a.get("supabase_dependent_id") == dep["id"]),
+                                (a for a in alunos_todos if dep["id"] in (a.get("dependent_ids") or [])),
                                 None
                             )
                             dcol1, dcol2 = st.columns([5, 1])
@@ -208,7 +205,7 @@ with aba_lista:
                     st.markdown("**Vincular aluno como dependente:**")
 
                     if not opcoes_alunos:
-                        st.caption("Todos os alunos já estão vinculados a um responsável.")
+                        st.caption("Nenhum aluno cadastrado.")
                     else:
                         sel = st.selectbox(
                             "Selecione o aluno",
@@ -261,10 +258,9 @@ with aba_novo:
     st.divider()
 
     alunos_form = carregar_alunos()
-    alunos_livres_form = [a for a in alunos_form if not a.get("supabase_dependent_id")]
     opcoes_form = {
         f"{a['nome']}  ({a.get('turma_nome') or 'sem turma'})": a
-        for a in alunos_livres_form
+        for a in alunos_form
     }
 
     with st.form("form_novo_resp", clear_on_submit=True):
@@ -278,7 +274,7 @@ with aba_novo:
         st.caption("Selecione os alunos que este responsável acompanha. Apenas alunos ainda não vinculados aparecem aqui.")
 
         if not opcoes_form:
-            st.info("Nenhum aluno disponível para vincular. Cadastre alunos primeiro.")
+            st.info("Nenhum aluno cadastrado. Cadastre alunos primeiro.")
             selecionados = []
         else:
             selecionados = st.multiselect(

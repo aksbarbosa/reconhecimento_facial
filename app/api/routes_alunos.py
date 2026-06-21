@@ -19,7 +19,8 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from app.services.aluno_service import AlunoService
 from app.db.models import (
     get_all_alunos, get_aluno_by_id, delete_aluno,
-    update_aluno_turma, update_aluno_dependent_id, get_turma_by_id
+    update_aluno_turma, get_turma_by_id,
+    add_aluno_dependente, remove_aluno_dependente,
 )
 from app.utils.security import verify_api_key
 
@@ -116,12 +117,22 @@ def get_aluno(aluno_id: int):
 
 @router.patch("/{aluno_id}/dependent")
 def link_dependent(aluno_id: int, supabase_dependent_id: str = Form(...)):
-    """Vincula um aluno ao dependente correspondente no Supabase/FaceNotify."""
-    updated = update_aluno_dependent_id(aluno_id, supabase_dependent_id)
-    if not updated:
+    """Adiciona um vínculo aluno↔dependente (suporta múltiplos responsáveis)."""
+    if get_aluno_by_id(aluno_id) is None:
         raise HTTPException(status_code=404, detail=f"Aluno ID {aluno_id} não encontrado.")
+    add_aluno_dependente(aluno_id, supabase_dependent_id)
     _reload_camera_candidates()
     return {"message": f"Aluno ID {aluno_id} vinculado ao dependente {supabase_dependent_id}."}
+
+
+@router.delete("/{aluno_id}/dependent/{dep_uuid}")
+def unlink_dependent(aluno_id: int, dep_uuid: str):
+    """Remove um vínculo específico aluno↔dependente."""
+    removed = remove_aluno_dependente(aluno_id, dep_uuid)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Vínculo não encontrado.")
+    _reload_camera_candidates()
+    return {"message": f"Vínculo removido: aluno {aluno_id} ↔ dependente {dep_uuid}."}
 
 
 @router.patch("/{aluno_id}/turma")

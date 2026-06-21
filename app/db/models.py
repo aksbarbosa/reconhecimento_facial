@@ -160,14 +160,32 @@ def create_aluno(nome: str, turma_id: int = None,
     return aluno
 
 
-def update_aluno_dependent_id(aluno_id: int, supabase_dependent_id: str) -> bool:
-    """Vincula um aluno ao dependente correspondente no Supabase/FaceNotify."""
+def add_aluno_dependente(aluno_id: int, supabase_dependent_id: str) -> bool:
+    """Adiciona um vínculo aluno↔dependente (suporta múltiplos responsáveis)."""
     with get_cursor(commit=True) as cursor:
         cursor.execute(
-            "UPDATE alunos SET supabase_dependent_id = %s WHERE id = %s;",
-            (supabase_dependent_id, aluno_id)
+            """
+            INSERT INTO aluno_dependentes (aluno_id, supabase_dependent_id)
+            VALUES (%s, %s) ON CONFLICT DO NOTHING;
+            """,
+            (aluno_id, supabase_dependent_id)
+        )
+        return True
+
+
+def remove_aluno_dependente(aluno_id: int, supabase_dependent_id: str) -> bool:
+    """Remove um vínculo específico aluno↔dependente."""
+    with get_cursor(commit=True) as cursor:
+        cursor.execute(
+            "DELETE FROM aluno_dependentes WHERE aluno_id = %s AND supabase_dependent_id = %s;",
+            (aluno_id, supabase_dependent_id)
         )
         return cursor.rowcount > 0
+
+
+def update_aluno_dependent_id(aluno_id: int, supabase_dependent_id: str) -> bool:
+    """Mantido por compatibilidade — use add_aluno_dependente para novos vínculos."""
+    return add_aluno_dependente(aluno_id, supabase_dependent_id)
 
 
 def update_aluno_turma(aluno_id: int, turma_id: int) -> bool:
@@ -201,18 +219,25 @@ def get_aluno_by_id(aluno_id: int) -> dict:
 
 def get_all_alunos() -> list:
     """
-    Retorna todos os alunos, com nome da turma e do horário.
-    Usado para a listagem de alunos no frontend.
+    Retorna todos os alunos com turma, horário e lista de dependent_ids vinculados.
     """
     with get_cursor() as cursor:
         cursor.execute(
             """
             SELECT a.id, a.nome, a.turma_id, a.created_at,
                    t.nome AS turma_nome,
-                   h.nome AS horario_nome, h.inicio, h.fim
+                   h.nome AS horario_nome, h.inicio, h.fim,
+                   COALESCE(
+                       ARRAY_AGG(ad.supabase_dependent_id::text)
+                       FILTER (WHERE ad.supabase_dependent_id IS NOT NULL),
+                       ARRAY[]::text[]
+                   ) AS dependent_ids
             FROM alunos a
-            LEFT JOIN turmas t   ON t.id = a.turma_id
-            LEFT JOIN horarios h ON h.id = t.horario_id
+            LEFT JOIN turmas t            ON t.id = a.turma_id
+            LEFT JOIN horarios h          ON h.id = t.horario_id
+            LEFT JOIN aluno_dependentes ad ON ad.aluno_id = a.id
+            GROUP BY a.id, a.nome, a.turma_id, a.created_at,
+                     t.nome, h.nome, h.inicio, h.fim
             ORDER BY a.nome;
             """
         )
@@ -274,14 +299,22 @@ def get_all_embeddings() -> list:
         cursor.execute(
             """
             SELECT fe.id, fe.aluno_id, a.nome AS aluno_nome,
-                   a.supabase_dependent_id,
                    t.nome AS turma_nome,
                    h.nome AS horario_nome, h.inicio, h.fim,
-                   fe.embedding, fe.image_path
+                   fe.embedding, fe.image_path,
+                   COALESCE(
+                       ARRAY_AGG(ad.supabase_dependent_id::text)
+                       FILTER (WHERE ad.supabase_dependent_id IS NOT NULL),
+                       ARRAY[]::text[]
+                   ) AS dependent_ids
             FROM face_embeddings fe
-            JOIN alunos a        ON a.id = fe.aluno_id
-            LEFT JOIN turmas t   ON t.id = a.turma_id
-            LEFT JOIN horarios h ON h.id = t.horario_id
+            JOIN alunos a              ON a.id = fe.aluno_id
+            LEFT JOIN turmas t         ON t.id = a.turma_id
+            LEFT JOIN horarios h       ON h.id = t.horario_id
+            LEFT JOIN aluno_dependentes ad ON ad.aluno_id = a.id
+            GROUP BY fe.id, fe.aluno_id, a.nome,
+                     t.nome, h.nome, h.inicio, h.fim,
+                     fe.embedding, fe.image_path
             ORDER BY a.nome;
             """
         )
@@ -292,16 +325,16 @@ def get_all_embeddings() -> list:
         row = dict(row)
         embedding_array = np.frombuffer(row["embedding"], dtype=np.float32)
         candidates.append({
-            "id":                     row["id"],
-            "aluno_id":               row["aluno_id"],
-            "aluno_nome":             row["aluno_nome"],
-            "supabase_dependent_id":  row["supabase_dependent_id"],
-            "turma_nome":             row["turma_nome"],
-            "horario_nome":           row["horario_nome"],
-            "inicio":                 row["inicio"],
-            "fim":                    row["fim"],
-            "embedding":              embedding_array,
-            "image_path":             row["image_path"],
+            "id":            row["id"],
+            "aluno_id":      row["aluno_id"],
+            "aluno_nome":    row["aluno_nome"],
+            "dependent_ids": row["dependent_ids"] or [],
+            "turma_nome":    row["turma_nome"],
+            "horario_nome":  row["horario_nome"],
+            "inicio":        row["inicio"],
+            "fim":           row["fim"],
+            "embedding":     embedding_array,
+            "image_path":    row["image_path"],
         })
     return candidates
 

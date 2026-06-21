@@ -49,7 +49,17 @@ CREATE TABLE IF NOT EXISTS alunos (
     created_at            TIMESTAMP DEFAULT NOW()
 );
 
--- ── 4. FACE EMBEDDINGS ───────────────────────────────────────────────────────────
+-- ── 4. ALUNO DEPENDENTES (junction) ────────────────────────────────────────────
+-- Um aluno pode ter mais de um responsável/dependente no FaceNotify.
+-- ON DELETE CASCADE: apagar o aluno remove todos os seus vínculos.
+
+CREATE TABLE IF NOT EXISTS aluno_dependentes (
+    aluno_id              INTEGER REFERENCES alunos(id) ON DELETE CASCADE,
+    supabase_dependent_id UUID    NOT NULL,
+    PRIMARY KEY (aluno_id, supabase_dependent_id)
+);
+
+-- ── 5. FACE EMBEDDINGS ───────────────────────────────────────────────────────────
 -- Vetor de 512 números gerado pela foto do aluno (InsightFace).
 -- ON DELETE CASCADE: apagar o aluno apaga seus embeddings.
 
@@ -61,7 +71,7 @@ CREATE TABLE IF NOT EXISTS face_embeddings (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- ── 5. ACCESS LOGS ───────────────────────────────────────────────────────────────
+-- ── 6. ACCESS LOGS ───────────────────────────────────────────────────────────────
 -- Histórico de reconhecimentos. access_granted = acesso liberado (TRUE) ou negado.
 -- ON DELETE CASCADE: apagar o aluno apaga seus logs.
 

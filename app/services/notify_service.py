@@ -40,42 +40,8 @@ _CAMERA_LOCATION = {
 }
 
 
-def notify_recognition(resultado: dict) -> None:
-    """
-    Dispara o webhook de reconhecimento para a Edge Function do Supabase.
-
-    :param resultado: Dicionário com os dados do reconhecimento vindos do CameraWorker.
-                      Precisa ter 'supabase_dependent_id', 'aluno_nome' e 'similarity'.
-    """
-    dependent_id = resultado.get("supabase_dependent_id")
-    if not dependent_id:
-        logger.debug(
-            f"Aluno '{resultado.get('aluno_nome')}' sem supabase_dependent_id — "
-            "notificação não enviada."
-        )
-        return
-
-    camera_id = _CAMERA_LOCATION["camera_id"]
-    cooldown_key = (dependent_id, camera_id)
-
-    now = time.monotonic()
-    last = _last_sent.get(cooldown_key, 0.0)
-    if now - last < _COOLDOWN_SECONDS:
-        remaining = int(_COOLDOWN_SECONDS - (now - last))
-        logger.debug(
-            f"Cooldown ativo para '{resultado.get('aluno_nome')}' em '{camera_id}' — "
-            f"próxima notificação em {remaining}s."
-        )
-        return
-    _last_sent[cooldown_key] = now
-
-    if not _EDGE_FUNCTION_URL or not _WEBHOOK_SECRET:
-        logger.warning(
-            "EDGE_FUNCTION_URL ou WEBHOOK_SECRET não configurados — "
-            "notificação não enviada."
-        )
-        return
-
+def _send_to_edge(dependent_id: str, resultado: dict) -> None:
+    """Envia um evento para a Edge Function para um único dependent_id."""
     payload = {
         "person_id":   dependent_id,
         "person_name": resultado.get("aluno_nome", ""),
@@ -83,7 +49,6 @@ def notify_recognition(resultado: dict) -> None:
         "timestamp":   datetime.now(timezone.utc).isoformat(),
         "confidence":  round(float(resultado.get("similarity", 0)), 4),
     }
-
     try:
         response = httpx.post(
             _EDGE_FUNCTION_URL,
@@ -108,3 +73,43 @@ def notify_recognition(resultado: dict) -> None:
         logger.error("Timeout ao enviar notificação para a Edge Function.")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação: {e}")
+
+
+def notify_recognition(resultado: dict) -> None:
+    """
+    Dispara o webhook de reconhecimento para todos os responsáveis vinculados ao aluno.
+
+    :param resultado: Dicionário com os dados do reconhecimento vindos do CameraWorker.
+                      Precisa ter 'dependent_ids' (lista de UUIDs), 'aluno_nome' e 'similarity'.
+    """
+    dependent_ids = resultado.get("dependent_ids") or []
+    if not dependent_ids:
+        logger.debug(
+            f"Aluno '{resultado.get('aluno_nome')}' sem dependentes vinculados — "
+            "notificação não enviada."
+        )
+        return
+
+    if not _EDGE_FUNCTION_URL or not _WEBHOOK_SECRET:
+        logger.warning(
+            "EDGE_FUNCTION_URL ou WEBHOOK_SECRET não configurados — "
+            "notificação não enviada."
+        )
+        return
+
+    camera_id = _CAMERA_LOCATION["camera_id"]
+    now = time.monotonic()
+
+    for dependent_id in dependent_ids:
+        cooldown_key = (dependent_id, camera_id)
+        last = _last_sent.get(cooldown_key, 0.0)
+        if now - last < _COOLDOWN_SECONDS:
+            remaining = int(_COOLDOWN_SECONDS - (now - last))
+            logger.debug(
+                f"Cooldown ativo para '{resultado.get('aluno_nome')}' "
+                f"(dependent {dependent_id}) em '{camera_id}' — "
+                f"próxima em {remaining}s."
+            )
+            continue
+        _last_sent[cooldown_key] = now
+        _send_to_edge(dependent_id, resultado)
