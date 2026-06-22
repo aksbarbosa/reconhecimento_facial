@@ -121,16 +121,17 @@ serve(async (req) => {
   const { data: event } = await supabase
     .from('recognition_events')
     .insert({
-      user_id:      userId,
-      dependent_id: person_id,
+      user_id:       userId,
+      dependent_id:  person_id,
       person_name,
-      camera_id:    location.camera_id,
-      camera_label: location.camera_label,
-      address:      location.address,
-      city:         location.city,
-      state:        location.state,
+      camera_id:     location.camera_id,
+      camera_label:  location.camera_label,
+      address:       location.address,
+      city:          location.city,
+      state:         location.state,
       confidence,
       timestamp,
+      access_granted,
     })
     .select('id')
     .single();
